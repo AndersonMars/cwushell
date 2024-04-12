@@ -2,35 +2,33 @@
 //CS 470: Operating Systems
 //Lab 1: CWUSHELL
 
-#include <iostream>
 #include <fstream>
 #include <sstream>
-#include <string.h>
+#include <iostream>
+#include <string>
 #include <unistd.h>
 #include <cstdlib>
 #include <stdio.h>
+#include <vector>
+#include <regex>
+
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
-#include <vector>
-#include <regex>
-#include <time.h>
+#include <ctime>
 #include <sys/utsname.h>
 
 using namespace std;
 
 //methods
-void printManual();
-int cwushellCommand(vector<string> localCommand);
 vector<string> parseCommand(string &input);
-int exitOut(vector<string> localCommand);
-int promptChange(vector<string> localCommand);
-void promptChangeHelp();
-int getFileInfo(vector<string> localCommand);
-void getFileInfoHelp();
-int getOSInfo(vector<string> localCommand);
-void getOSInfoHelp();
-
+int commandCheck(string command);
+int exitCommand(vector<string> command);
+int promptCommand(vector<string> command);
+int fileInfoCommand(vector<string> command);
+int osInfoCommand(vector<string> command);
+int systemCommand(vector<string> command);
+int manualCommand();
 
 
 //variables to use
@@ -38,13 +36,16 @@ string commands[5] = { "exit", "prompt", "fileinfo", "osinfo", "manual" };
 string input;
 string defaultPrompt = "cwushell";
 string prompt = defaultPrompt;
-char** sysCommand;
+int lastCommand = 0;
+
 int main()
 {
-	while(true)
+
+	int exitVal = -1;
+	bool exit = false;
+	while(!exit)
 	{
-		//output "*prompt* >" to the command line at the start
-		//of every iteration
+		//output whatever the prompt currently is, will be cwushell on launch
 		cout << prompt << "> ";
 		
 		//Get the command from the user, and tokenize it into the arrays
@@ -52,13 +53,407 @@ int main()
 		
 		vector<string> parsedCommand = parseCommand(input);
 		
-		//if we do not detect a local command to cwushell, run it as a system command.
-		if(cwushellCommand(parsedCommand) == -1)
+		//pass the first part of the command to check if it is a system call or local
+		int commandVal = commandCheck(parsedCommand[0]);
+		
+		//switch to decide what to do with each command
+		switch(commandVal)
 		{
-			system(input.c_str());
+			//system command: fork to execute
+			case -1:
+			lastCommand = systemCommand(parsedCommand);
+			break;
+			//exit command: check for an exit val, if not get the last exit value, if none exist, exit 0
+			case 0:
+			exitVal = exitCommand(parsedCommand);
+			if(exitVal != -1) exit = true;
+			break;
+			//prompt command: check if restore to default or new prompt
+			case 1:
+			lastCommand = promptCommand(parsedCommand);
+			break;
+			//fileinfo command: check file and get info based on switches
+			case 2:
+			lastCommand = fileInfoCommand(parsedCommand);
+			break;
+			//osinfo command: get info about os depending on switches
+			case 3:
+			lastCommand = osInfoCommand(parsedCommand);
+			break;
+			//manual command, print a help list to the screen
+			case 4:
+			manualCommand();
+			break;
 		}
+	
 	}
+	cout << "Exited with value " << exitVal << endl;
+	return exitVal;
+}
+
+int manualCommand()
+{
+
+	cout << "Welcome to the cwushell manual. Here you can see the various commands available to\nthis shell.\nThese commands include: exit, prompt, fileinfo, osinfo,\nand other system commands normally available on the operating system.\nHere is more info for each command:\n\nUsage: exit [option]\nExits the shell with an exit value.\nThis exit value can be manually given with an option.\nIf no option is given, it will default to the return value of the last command\ngiven, or 0.\n\nUsage: prompt [option]\nChanges the prompt for the shell. By default, this prompt is cwushell.\nUsing an option will change the prompt to that new option, while no option will\nreset the prompt.\n\nUsage: fileinfo [option]\nPrints information related to filename given in option.\n-i \t prints the inode number of the file.\n-t \t print the type of file.\n-m \t print the date of last modification.\n\nUsage: osinfo [option]\nPrints information related to operating system given in option.\n-S \t prints the operating system running on this system.\n-v \t prints the version of the OS.\n-a \t prints the computer architecture.\n";
+	
 	return 0;
+
+}
+
+int systemCommand(vector<string> command)
+{
+	//convert the vector of strings to a singular string
+	string commandString;
+	for(int i = 0; i < command.size(); i++)
+	{
+		
+		commandString += command[i] + " ";
+	
+	}
+	return system(commandString.c_str());
+
+}
+
+int osInfoCommand(vector<string> command)
+{
+	if(command.size() == 1 || command[1] == "-h" || command[1] == "--help")
+	{
+		cout << "Usage: osinfo [option]" << endl;
+		cout << "Prints information related to operating system given in option." << endl;
+		cout << "-S \t prints the operating system running on this system." << endl;
+		cout << "-v \t prints the version of the OS." << endl;
+		cout << "-a \t prints the computer architecture." << endl;
+		return 0;
+	}
+	
+	struct utsname osDetails;
+	
+	int ret = uname(&osDetails);
+	
+	bool getName = false;
+	bool getVer = false;
+	bool getArc = false;
+	
+	//check for invalid characters
+	for(int i = 1; i < command.size(); i++)
+	{
+		if(command[i][0] != '-') 
+		{
+			cout << "You have entered an unknown parameter. Enter -h or --help after a command for more information." << endl;
+			return 1;
+		}
+		for(int j = 1; j < command[i].size(); j++)
+		{
+		
+			if(command[i][j] != 'S' && command[i][j] != 'v' && command[i][j] != 'a')
+			{
+			
+				cout << "You have entered an unknown parameter. Enter -h or --help after a command for more information." << endl;
+				return 1;
+			
+			}
+		
+		}
+	
+	}
+	
+	//otherwise, check which switches are being printed	
+	if(command[1].find("S") != string::npos) getName = true; 
+	if(command[1].find("v") != string::npos) getVer = true; 
+	if(command[1].find("a") != string::npos) getArc = true;
+		
+		
+	if(command.size() >= 4)
+	{
+		//if there are multiple calls to the same switch
+		if(command[2].find("S") != string::npos && getName == true)
+		{
+		 	cout << "You have entered too many parameters. Enter -h or --help after a command for more information." << endl;
+		 	return 1;
+		}
+			
+		if(command[2].find("S") != string::npos) getName = true;
+			
+		if(command[2].find("v") != string::npos && getVer == true)
+		{
+		 	cout << "You have entered too many parameters. Enter -h or --help after a command for more information." << endl;
+		 	return 1;
+		}
+			
+		if(command[2].find("v") != string::npos) getVer = true;
+			
+		if(command[2].find("a") != string::npos && getArc == true)
+		{
+			cout << "You have entered too many parameters. Enter -h or --help after a command for more information." << endl;
+			return 1;
+		}
+			
+		if(command[2].find("a") != string::npos) getArc = true;
+		
+	}
+	if(command.size() == 5)
+	{
+		if(command[3].find("S") != string::npos && getName == true)
+		{
+			cout << "You have entered too many parameters. Enter -h or --help after a command for more information." << endl;
+			return 1;
+		}
+			
+		if(command[3].find("S") != string::npos) getName = true;
+			
+		if(command[3].find("v") != string::npos && getVer == true)
+		{
+			cout << "You have entered too many parameters. Enter -h or --help after a command for more information." << endl;
+			return 1;
+		}
+			
+		if(command[3].find("v") != string::npos) getVer = true;
+			
+		if(command[3].find("a") != string::npos && getArc == true)
+		{
+			cout << "You have entered too many parameters. Enter -h or --help after a command for more information." << endl;
+			return 1;
+		}
+			 
+		if(command[3].find("a") != string::npos) getArc = true;
+		
+	}
+	
+	if(getName == true) cout << "Operating System: " << osDetails.sysname << endl; 
+	if(getVer == true) cout << "OS Version: " << osDetails.release << endl;
+	if(getArc == true) cout << "Architecture: " << osDetails.machine << endl;
+	
+
+	return 0;
+}
+
+int fileInfoCommand(vector<string> command)
+{
+
+	if(command.size() == 1 || command[1] == "-h" || command[1] == "--help")
+	{
+		cout << "Usage: fileinfo [option]" << endl;
+		cout << "Prints information related to filename given in option." << endl;
+		cout << "-i \t prints the inode number of the file." << endl;
+		cout << "-t \t print the type of file." << endl;
+		cout << "-m \t print the date of last modification." << endl;
+	}
+	
+	//check for invalid characters
+	for(int i = 1; i < command.size() - 1; i++)
+	{
+		if(command[i][0] != '-') 
+		{
+			cout << "You have entered an unknown parameter. Enter -h or --help after a command for more information." << endl;
+			return 1;
+		}
+		for(int j = 1; j < command[i].size(); j++)
+		{
+		
+			if(command[i][j] != 'i' && command[i][j] != 't' && command[i][j] != 'm')
+			{
+			
+				cout << "You have entered an unknown parameter. Enter -h or --help after a command for more information." << endl;
+				return 1;
+			
+			}
+		
+		}
+	
+	}
+	
+	struct stat fileStat;
+	if(stat(command[command.size() - 1].c_str(), &fileStat) < 0)
+	{
+	
+		cerr << "Error: Unable to get file status." << endl;
+		return 1;
+	
+	}
+	
+	
+	//get file type
+	string fileType;
+	if(S_ISREG(fileStat.st_mode)) fileType = "Regular file";
+	else if(S_ISDIR(fileStat.st_mode)) fileType = "Directory";
+	else if(S_ISLNK(fileStat.st_mode)) fileType = "Symbolic link";
+	else fileType = "Other";
+	
+	//get Inode
+	ino_t inode = fileStat.st_ino;
+	
+	//get last modified time
+	time_t modifiedTime = fileStat.st_mtime;
+	
+	bool getType = false;
+	bool getInode = false;
+	bool getTime = false;
+	
+	//if command is 2, print every switch
+	if(command.size() == 2)
+	{
+		getType = true;
+		getInode = true;
+		getTime = true;
+	}
+	
+	//otherwise, check which switches are being printed
+	else
+	{
+		
+		if(command[1].find("i") != string::npos) getInode = true;
+		if(command[1].find("t") != string::npos) getType = true;
+		if(command[1].find("m") != string::npos) getTime = true;
+		
+		
+		if(command.size() >= 4)
+		{
+			//if there are multiple calls to the same switch
+			if(command[2].find("i") != string::npos && getInode == true)
+			{
+			 cout << "You have entered too many parameters. Enter -h or --help after a command for more information." << endl;
+			 return 1;
+			}
+			
+			if(command[2].find("i") != string::npos) getInode = true;
+			
+			if(command[2].find("t") != string::npos && getType == true)
+			{
+			 cout << "You have entered too many parameters. Enter -h or --help after a command for more information." << endl;
+			 return 1;
+			}
+			
+			if(command[2].find("t") != string::npos) getType = true;
+			
+			if(command[2].find("m") != string::npos && getTime == true)
+			{
+			 cout << "You have entered too many parameters. Enter -h or --help after a command for more information." << endl;
+			 return 1;
+			}
+			
+			if(command[2].find("m") != string::npos) getTime = true;
+		
+		}
+		if(command.size() == 5)
+		{
+			if(command[3].find("i") != string::npos && getInode == true)
+			{
+			 cout << "You have entered too many parameters. Enter -h or --help after a command for more information." << endl;
+			 return 1;
+			}
+			
+			if(command[3].find("i") != string::npos) getInode = true;
+			
+			if(command[3].find("t") != string::npos && getType == true)
+			{
+			 cout << "You have entered too many parameters. Enter -h or --help after a command for more information." << endl;
+			 return 1;
+			}
+			
+			if(command[3].find("t") != string::npos) getType = true;
+			
+			if(command[3].find("m") != string::npos && getTime == true)
+			{
+			 cout << "You have entered too many parameters. Enter -h or --help after a command for more information." << endl;
+			 return 1;
+			}
+			 
+			if(command[3].find("m") != string::npos) getTime = true;
+		
+		}
+		//check if all switches are grouped
+		if(command[1] == "-itm") getInode, getType, getTime = true;
+	}
+	
+	if(getInode == true) cout << "Inode: " << inode << endl; 
+	if(getType == true) cout << "File Type: " << fileType << endl;
+	if(getTime == true) cout << "Last modified time: " << modifiedTime << endl;
+	
+	
+	return 0;
+}
+
+int promptCommand(vector<string> command)
+{
+	//if we reach this point and size == 1, then it is just a default reset
+	if(command.size() == 1) prompt = defaultPrompt;
+	else if(command.size() > 2) cout << "You have entered an unknown parameter. Enter -h or --help after a command for more information." << endl;
+	else prompt = command[1];
+	lastCommand = 0;
+	return 0;
+
+}
+
+int exitCommand(vector<string> command)
+{
+	//lastCommand == 0 when no commands have been called, otherwise it is updated
+	if(command.size() == 1)
+	{
+		return lastCommand;
+	}
+	
+	//check to see if the only characters in the command are the exit command and number
+	if(command.size() > 2) cout << "You have entered an unknown parameter. Enter -h or --help after a command for more information." << endl;
+	//check if the second part of the command is only an integer
+	int exitVal;
+	try 
+	{
+		exitVal = stoi(command[1]);
+		return exitVal;
+	}
+	catch(...)
+	{
+	
+		cout << "You have entered an unknown parameter. Enter -h or --help after a command for more information." << endl;
+		return -1;
+	
+	}
+
+}
+
+int commandCheck(string command)
+{
+	int returnVal = -1;
+
+	//default value of -1, if still -1 it will run system commands
+	int select = -1;
+	for(int i = 0; i < 5; i++)
+	{
+		//if the command input matches one of the cwushell commands
+		if(command.compare(commands[i]) == 0)
+		{
+			select = i;
+			break;
+		}
+	
+	}
+	
+	switch(select)
+	{
+	//If any of thes numbers return we know its a local command, if -1 returns it's system
+		//exit command
+		case 0:
+			returnVal = 0;
+			break;
+		//prompt command
+		case 1:
+			returnVal = 1;
+			break;
+		//fileinfo command
+		case 2:
+			returnVal = 2;
+			break;
+		//osinfo command
+		case 3:
+			returnVal = 3;
+			break;
+		//manual command
+		case 4: 
+			returnVal = 4;	
+	}
+	return returnVal;
+
+
 }
 
 vector<string> parseCommand(string &input)
@@ -70,462 +465,4 @@ vector<string> parseCommand(string &input)
 	//return the parsed string
 	return {first, last};
 
-}
-
-int cwushellCommand(vector<string> localCommand)
-{
-	//default value of -1, if still -1 it will run system commands
-	int select = -1;
-	for(int i = 0; i < 5; i++)
-	{
-		//if the command input matches one of the cwushell commands
-		if(localCommand[0].compare(commands[i]) == 0)
-		{
-			select = i;
-			break;
-		}
-	
-	}
-	
-	switch(select)
-	{
-		//regular system command
-		case -1:
-			localCommand.clear();
-			return -1;
-		//exit command
-		case 0:
-			exitOut(localCommand);
-		//prompt command
-		case 1:
-			promptChange(localCommand);
-			break;
-		case 2:
-		//fileinfo command
-			getFileInfo(localCommand);
-			break;
-		//osinfo command
-		case 3:
-			getOSInfo(localCommand);
-			break;
-		//manual command
-		case 4: 
-			printManual();
-		
-	
-	}
-	
-	localCommand.clear();
-	return 0;
-
-}
-
-int exitOut(vector<string> localCommand)
-{	
-	//if only exit was input, simply exit with default value
-	if(localCommand.size() == 1)
-	{
-	
-		exit(0);
-	
-	}
-	
-	//if there is an exit value, verify it is an integer, if it is not, exit with defautl value 0
-	if(localCommand.size() > 1)
-	{
-		//make sure every value in the exitvalue is an integer, if not exit default
-		for(int i = 0; i < localCommand[1].size(); i++)
-		{
-	
-			if(!isdigit(localCommand[1][i])) exit(0);
-	
-		}
-		//exit with value given by user if all values are an integer
-		exit(stoi(localCommand[1]));
-	}
-	return 0;
-}
-
-int promptChange(vector<string> localCommand)
-{
-	//if the user input more than prompt [new_prompt]
-	if(localCommand.size() > 2)
-	{
-	
-		cout << "You have entered an unknown parameter... Enter -h or --help after a command for information." << endl;
-		return 0;
-	
-	}
-	//if the user only input prompt, set to default
-	if(localCommand.size() == 1)
-	{
-		prompt = defaultPrompt;
-	}
-	//if they input help commands, cout help function
-	else if(localCommand[1] == "-h" || localCommand[1] == "--help")
-	{
-	
-		promptChangeHelp();
-		return 0;
-	}
-	//if none of these cases, set new prompt
-	else
-	{
-	
-		prompt = localCommand[1];
-	}
-	
-	localCommand.clear();
-	return 0;
-
-}
-
-void promptChangeHelp()
-{
-	cout << "Usage: prompt [new_prompt]" << endl;
-	cout << "Changes the shell prompt. Leave new_prompt empty to set to the default prompt." << endl;
-}
-
-int getFileInfo(vector<string> localCommand)
-{
-	//if the help switch was utilized, or if just fileinfo was input
-	if (localCommand.size() == 1 || localCommand[1] == "-h" || localCommand[1] == "--help") 
-	{
-        	getFileInfoHelp();
-        	return 0;
-	}
-	
-	//use stat to pull relevant file info
-	struct stat result;
-	
-	//calls stat function on the file name and stores result in 'result'
-	//checks whatever the last input is in localCommand, since switches come before the file
-	int status = stat(localCommand[localCommand.size()-1].c_str(), &result);
-	
-	//file not found
-	if(status < 0)
-	{
-		cout << "Invalid file name or missing file name, please try again" << endl;
-		return 0;
-	}
-	
-	//check type of file
-	string filetype;
-	
-	if(S_ISREG(result.st_mode) != 0) 
-	{
-		filetype = "Regular file";
-	}
-	if(S_ISDIR(result.st_mode) != 0) 
-	{
-		filetype = "Directory";
-	}
-	if(S_ISLNK(result.st_mode) != 0)
-	{
-		filetype = "Symbolic link";
-	}
-	if(S_ISBLK(result.st_mode) != 0) 
-	{
-		filetype = "Block Device";
-	}
-	if(S_ISSOCK(result.st_mode) != 0) 
-	{
-		filetype = "Socket";
-	}
-	if(S_ISCHR(result.st_mode) != 0) 
-	{
-		filetype = "Character device";
-	}
-	if(S_ISFIFO(result.st_mode) != 0) 
-	{
-		filetype = "FIFO";
-	}
-	
-	//if just fileinfo [filename] was called, utilize all 3 switches
-	if(localCommand.size() == 2)
-	{
-		cout << "Inode: " << result.st_ino << endl;
-		cout << "File Type: " << filetype << endl;
-		cout << "Last modified time: " << ctime(&result.st_mtime) << endl;
-		return 0;
-	
-	}
-	//if its the non-default case, and there is a switch
-	if(localCommand.size() > 2 && localCommand[1][0] == '-')
-	{
-	
-		//if only - was entered
-		if(localCommand[2].size() == 1)
-		{
-		
-			cout << "Invalid input, please try again." << endl;
-		
-		}
-		
-		//if there is an invalid switch in the first space after -
-		if(localCommand[1].size() > 1 && localCommand[1][1] != 'i' && localCommand[1][1] != 't' && localCommand[1][1] != 'm')
-		{
-		
-			cout << "Invalid switch, please try again." << endl;
-			return 0;
-		
-		}
-		
-		//if there is an invalid switch in the second space after -
-		if(localCommand[1].size() > 2 && localCommand[1][2] != 'i' && localCommand[1][2] != 't' && localCommand[1][2] != 'm')
-		{
-		
-			cout << "Invalid switch, please try again." << endl;
-			return 0;
-		
-		}
-		
-		//if there is an invalid switch in the third space after -
-		if(localCommand[1].size() > 3 && localCommand[1][3] != 'i' && localCommand[1][3] != 't' && localCommand[1][3] != 'm')
-		{
-		
-			cout << "Invalid switch, please try again." << endl;
-			return 0;
-		
-		}
-		
-		//if there are more than the three switches
-		if(localCommand[1].size() > 4)
-		{
-		
-			cout << "Invalid switch, please try again." << endl;
-			return 0;
-		
-		}
-		
-		//check if the first switch is i t or m, and print the corresponding output
-		else if(localCommand[1].size() > 1 && localCommand[1][1] == 'i')
-		{
-		
-			cout << "Inode: " << result.st_ino << endl;
-		
-		}
-		
-		else if(localCommand[1].size() > 1 && localCommand[1][1] == 't')
-		{
-		
-			cout << "File Type: " << filetype << endl;
-		
-		}
-		
-		else if(localCommand[1].size() > 1 && localCommand[1][1] == 'm')
-		{
-		
-			cout << "Last modified time: " << ctime(&result.st_mtime) << endl;	
-		
-		}
-		
-		//these statements check if multiple switches are input in one command, i.e: fileinfo -itm [file]
-		
-		if(localCommand[1].size() > 2 && localCommand[1][2] == 'i')
-		{
-		
-			cout << "Inode: " << result.st_ino << endl;
-		
-		}
-		
-		else if(localCommand[1].size() > 2 && localCommand[1][2] == 't')
-		{
-		
-			cout << "File Type: " << filetype << endl;
-	
-		}
-		
-		else if(localCommand[1].size() > 2 && localCommand[1][2] == 'm')
-		{
-		
-			cout << "Last modified time: " << ctime(&result.st_mtime) << endl;	
-		
-		}
-		
-		if(localCommand[1].size() > 3 && localCommand[1][3] == 'i')
-		{
-		
-			cout << "Inode: " << result.st_ino << endl;
-		
-		}
-		
-		if(localCommand[1].size() > 3 && localCommand[1][3] == 't')
-		{
-		
-			cout << "File Type: " << filetype << endl;
-		
-		}
-		
-		if(localCommand[1].size() > 3 && localCommand[1][3] == 'm')
-		{
-		
-			cout << "Last modified time: " << ctime(&result.st_mtime) << endl;	
-		
-		}
-	}
-		
-	return 0;
-
-}
-
-void getFileInfoHelp()
-{
-	cout << "Usage: fileinfo [option]" << endl;
-	cout << "Prints information related to filename given in option." << endl;
-	cout << "-i \t prints the inode number of the file." << endl;
-	cout << "-t \t print the type of file." << endl;
-	cout << "-m \t print the date of last modification." << endl;
-}
-
-int getOSInfo(vector<string> localCommand)
-{
-	if (localCommand.size() == 1 || localCommand[1] == "-h" || localCommand[1] == "--help") 
-	{
-        	getOSInfoHelp();
-        	return 0;
-	}
-	
-	
-	struct utsname osDetails;
-	
-	int ret = uname(&osDetails);
-	
-	//non-default case, and switch was input
-	if(localCommand.size() > 1 && localCommand[1][0] == '-')
-	{
-	
-		//if only - was entered
-		if(localCommand[1].size() == 1)
-		{
-		
-			cout << "Invalid input, please try again." << endl;
-			return 0;
-		
-		}
-		
-		//if there is an invalid switch in the first space after -
-		if(localCommand[1].size() > 1 && localCommand[1][1] != 'S' && localCommand[1][1] != 'v' && localCommand[1][1] != 'a')
-		{
-		
-			cout << "Invalid switch, please try again." << endl;
-			return 0;
-		
-		}
-		
-		//if there is an invalid switch in the second space after -
-		if(localCommand[1].size() > 2 && localCommand[1][2] != 'S' && localCommand[1][2] != 'v' && localCommand[1][2] != 'a')
-		{
-		
-			cout << "Invalid switch, please try again." << endl;
-			return 0;
-		
-		}
-		
-		//if there is an invalid switch in the third space after -
-		if(localCommand[1].size() > 3 && localCommand[1][3] != 'S' && localCommand[1][3] != 'v' && localCommand[1][3] != 'a')
-		{
-		
-			cout << "Invalid switch, please try again." << endl;
-			return 0;
-		
-		}
-		
-		//if there are more than the three switches
-		if(localCommand[1].size() > 4)
-		{
-		
-			cout << "Invalid switch, please try again." << endl;
-			return 0;
-		
-		}
-		
-		else if(localCommand[1].size() > 1 && localCommand[1][1] == 'S')
-		{
-		
-			cout << "Operating System: " << osDetails.sysname << endl;
-		
-		}
-		
-		else if(localCommand[1].size() > 1 && localCommand[1][1] == 'v')
-		{
-		
-			cout << "Version: " << osDetails.version << endl;
-		
-		}
-		
-		else if(localCommand[1].size() > 1 && localCommand[1][1] == 'a')
-		{
-		
-			cout << "Architecture: " << osDetails.machine << endl;	
-		
-		}
-		
-		if(localCommand[1].size() > 2 && localCommand[1][2] == 'S')
-		{
-		
-			cout << "Operating System: " << osDetails.sysname << endl;
-		
-		}
-		
-		else if(localCommand[1].size() > 2 && localCommand[1][2] == 'v')
-		{
-		
-			cout << "Version: " << osDetails.version << endl;
-	
-		}
-		
-		else if(localCommand[1].size() > 2 && localCommand[1][2] == 'a')
-		{
-		
-			cout << "Architecture: " << osDetails.machine << endl;
-		
-		}
-		
-		if(localCommand[1].size() > 3 && localCommand[1][3] == 'S')
-		{
-		
-			cout << "Operating System: " << osDetails.sysname << endl;
-		
-		}
-		
-		if(localCommand[1].size() > 3 && localCommand[1][3] == 'v')
-		{
-		
-			cout << "Version: " << osDetails.version << endl;
-		
-		}
-		
-		if(localCommand[1].size() > 3 && localCommand[1][3] == 'a')
-		{
-		
-			cout << "Architecture: " << osDetails.machine << endl;
-		
-		}
-	}
-	
-	return 0;
-}
-
-void getOSInfoHelp()
-{
-	cout << "Usage: osinfo [-switch]" << endl;
-	cout << "Prints information related to the operating system." << endl;
-	cout << "-S \t prints the operating system running on the machine." << endl;
-	cout << "-v \t prints the version of the operating system." << endl;
-	cout << "-a \t prints the computer architecture." << endl;
-}
-void printManual()
-{
-	
-	fstream help_file;
-	help_file.open("help.hlp", ios::in);
-	string line;
-	while(getline(help_file, line))
-	{
-	
-		cout << line << endl;
-	
-	}
-	
 }
